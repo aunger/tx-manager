@@ -117,12 +117,20 @@ class ProjectDeployer(object):
         #
         #######################
 
+        # A mapping of 302 redirects to be set up later
+        request_302 = dict()
+
+        # Use first HTML file as index.html if index.html doesn't exist
         if not do_part_template_only or do_multipart_merge:
-            # Copy first HTML file to index.html if index.html doesn't exist
             html_files = sorted(glob(os.path.join(output_dir, '*.html')))
             index_file = os.path.join(output_dir, 'index.html')
             if len(html_files) > 0 and not os.path.isfile(index_file):
-                copyfile(os.path.join(output_dir, html_files[0]), index_file)
+                # Redirect to main page.
+                commit_path = s3_commit_key + '/'
+                commit_index = commit_path + 'index.html'
+                main_page = '/' + commit_path + os.path.basename(html_files[0])
+                request_302[commit_path] = main_page
+                request_302[commit_index] = main_page
 
         # Copy all other files over that don't already exist in output_dir, like css files
         for filename in sorted(glob(os.path.join(source_dir, '*'))):
@@ -151,14 +159,18 @@ class ProjectDeployer(object):
                 App.logger.debug("Uploading {0} to {1}".format(path, key))
                 App.door43_s3_handler().upload_file(path, key, cache_time=0)
 
+        # Build redirects requested earlier.
+        for redir_from, redir_to in request_302.items():
+            self.create_redirect(redir_from, redir_to)
+
         if not do_part_template_only:
             # Now we place json files and redirect index.html for the whole repo to this index.html file
             try:
                 App.door43_s3_handler().copy(from_key='{0}/project.json'.format(s3_repo_key), from_bucket=App.cdn_bucket)
                 App.door43_s3_handler().copy(from_key='{0}/manifest.json'.format(s3_commit_key),
                                              to_key='{0}/manifest.json'.format(s3_repo_key))
-                App.door43_s3_handler().redirect(s3_repo_key, '/' + s3_commit_key)
-                App.door43_s3_handler().redirect(s3_repo_key + '/index.html', '/' + s3_commit_key)
+                self.create_redirect(s3_repo_key, '/' + s3_commit_key)
+                self.create_redirect(s3_repo_key + '/index.html', '/' + s3_commit_key)
                 self.write_data_to_file(output_dir, s3_commit_key, 'deployed', ' ')  # flag that deploy has finished
             except:
                 pass
@@ -286,6 +298,10 @@ class ProjectDeployer(object):
         key = s3_commit_key + '/' + fname
         App.logger.debug("Writing {0} to {1}': ".format(fname, key))
         App.cdn_s3_handler().upload_file(out_file, key, cache_time=0)
+
+    def create_redirect(self, redir_from, redir_to):
+        response = App.door43_s3_handler().redirect(redir_from, redir_to)
+        App.logger.debug("Add redirect from {0} to {1}: {2}".format(redir_from, redir_to, response))
 
     def run_templater(self, templater):  # for test purposes
         templater.run()
